@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracker tuning · Nobel Djessou</title>
+<style>
+  :root { --bg: #faf9f6; --surface: #ffffff; --line: #d8dfe0; --fg: #1d2a33; --title: #0c2d43; --muted: #526774;
+          --accent: #b1004c; --soft: #9fc9c5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 0 16px 48px; }
+  .notice { background: var(--title); color: #fff; font-size: 14px; padding: 8px 16px; text-align: center; }
+  h1 { color: var(--title); font-size: clamp(28px, 5vw, 40px); line-height: 1.15; margin: 32px 0 8px; }
+  h2 { color: var(--title); font-size: 22px; margin: 44px 0 12px; }
+  .lead { font-size: 18px; color: var(--muted); max-width: 760px; }
+  a { color: var(--accent); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 24px 0; }
+  .kpis div { background: var(--surface); border-radius: 8px; padding: 12px 14px; border-top: 4px solid var(--line); }
+  .kpis div.win { border-top-color: var(--accent); }
+  .kpis b { display: block; font-size: 26px; color: var(--title); font-variant-numeric: tabular-nums; }
+  .kpis span { font-size: 14px; color: var(--muted); }
+  .anim { width: 100%; max-width: 640px; height: auto; border-radius: 8px; display: block; background: #111; }
+  .table-wrap { overflow-x: auto; background: var(--surface); border-radius: 8px; padding: 4px 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { color: var(--muted); font-weight: 500; white-space: normal; vertical-align: bottom; }
+  td.win { color: var(--accent); font-weight: 600; }
+  .muted { color: var(--muted); font-size: 14px; }
+  ul { padding-left: 20px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="notice">Personal project. Public MOT17 detections and ground truth; tracker written from scratch; measured on a laptop CPU.</div>
+<main>
+  <h1>Tuning a multi-object tracker with metrics, without fooling yourself</h1>
+  <p class="lead">A detector draws boxes; a robot needs identities that hold from frame to frame. The tracker that links the boxes has settings, often left at the values of the paper it came from. Tuned on proper tracking metrics, and tested on sequences the tuning never saw, how much better does it keep identities?</p>
+
+  <div class="kpis" id="kpis"></div>
+
+  <h2>Same detections, two trackers</h2>
+  <p class="muted" id="vidnote"></p>
+  <img class="anim" src="tracks.webp" alt="Pedestrian tracking, SORT defaults above and tuned settings below; one colour per identity" width="640" height="720">
+
+  <h2>Held-out results</h2>
+  <p class="muted">Leave-one-sequence-out over the 7 MOT17 training sequences: for each one, the settings with the best IDF1 on the other six are chosen, then scored on it. Counts pooled over the seven held-out sequences. IDF1: how consistently each person keeps one identity. MOTA: misses, false positives and identity switches combined.</p>
+  <div class="table-wrap"><table id="cv"></table></div>
+
+  <h2>What the figures say</h2>
+  <ul>
+    <li><b>Identities hold much better with all three detectors</b> on sequences the tuning never saw: IDF1 rises, mostly because lost tracks are kept alive longer and weak detections may extend them.</li>
+    <li><b>MOTA barely moves, and with Faster R-CNN identity switches go up.</b> IDF1 and switch counts do not always agree: the choice of metric is a decision, not a detail.</li>
+    <li><b>The failures are on fast moving-camera sequences</b> (MOT17-10, MOT17-13): a constant-velocity Kalman filter in image coordinates cannot follow when the camera itself turns, and a long track life then links the wrong people. The next step is camera-motion compensation, not more tuning.</li>
+    <li><b>All folds picked the longest track life searched</b> (30 frames): the grid edge, so a wider search could still gain.</li>
+  </ul>
+
+  <h2>What the tuning chose</h2>
+  <div class="table-wrap"><table id="settings"></table></div>
+  <p class="muted" id="setnote"></p>
+
+  <h2>How it works</h2>
+  <ul>
+    <li><b>Kalman filter</b> per object: centre, area and aspect ratio, with constant velocity, predicts where each track should be in the next frame.</li>
+    <li><b>Hungarian matching</b> on IoU between predictions and detections; unmatched detections start new tracks.</li>
+    <li><b>Track life</b>: reported after <i>min hits</i> matches, deleted after <i>max age</i> frames unseen.</li>
+    <li><b>Second pass</b> (optional): weak detections may extend an existing track, never start one.</li>
+    <li><b>Evaluation</b>: py-motmetrics, MOT17 protocol (IoU 0.5, distractors removed).</li>
+  </ul>
+
+  <h2>Limits</h2>
+  <ul>
+    <li><b>Fixed public detections</b>: the gains are the tracker's alone.</li>
+    <li><b>Pedestrians, 2D, one camera</b>: no multi-camera fusion, no 3D positions or speeds.</li>
+    <li><b>Grid search</b> over a few settings; Kalman noise kept at SORT's values.</li>
+    <li><b>Training sequences only</b> (test ground truth is not public): leave-one-sequence-out stands in for a test set.</li>
+  </ul>
+
+  <footer>
+    Code, data and method: <a href="https://github.com/profirst30/track-tuning">github.com/profirst30/track-tuning</a> ·
+    <a href="https://www.linkedin.com/in/nobel-djessou/">Nobel Djessou</a><br>
+    Data: MOT17, MOTChallenge (Milan et al., 2016), CC BY-NC-SA 3.0. Non-commercial.
+  </footer>
+</main>
+<script src="results.js"></script>
+<script>
+const R = window.RESULTS, D = Object.keys(R.detectors);
+const pct = v => (100 * v).toFixed(1) + " %", n = v => v.toLocaleString("en");
+const idf = d => R.detectors[d];
+document.getElementById("kpis").innerHTML = [
+  ["win", D.map(d => "+" + (100 * (idf(d).cross_validated.idf1 - idf(d).default.idf1)).toFixed(1)).join(" / "), `IDF1 points gained on held-out sequences (${D.join(" / ")})`],
+  ["", D.map(d => n(idf(d).default.id_switches) + "→" + n(idf(d).cross_validated.id_switches)).join(" · "), `identity switches (${D.join(", ")}): fewer with two detectors, more with FRCNN`],
+  ["", D.map(d => { const x = 100 * (idf(d).cross_validated.mota - idf(d).default.mota); return (x >= 0 ? "+" : "") + x.toFixed(1); }).join(" / "), "MOTA points, same comparison"],
+  ["", n(Math.round(R.timing.frames_per_s)) + " fps", "tracker alone, NumPy, one CPU thread"],
+].map(([c, b, s]) => `<div class="${c}"><b>${b}</b><span>${s}</span></div>`).join("");
+
+const v = R.video;
+document.getElementById("vidnote").textContent =
+  `${v.seq}, ${v.detector} detections, first ${Math.round((v.last - v.first + 1) / 30)} seconds (every ${v.step === 2 ? "second" : v.step + "th"} frame). Above: SORT's published settings. Below: settings tuned without this sequence. One colour per identity: a box that changes colour is an identity switch.`;
+
+let h = "<tr><th>detector</th><th>tracker</th><th>IDF1</th><th>MOTA</th><th>identity switches</th><th>false positives</th><th>misses</th><th>mostly tracked</th></tr>";
+for (const d of D) {
+  for (const [k, name] of [["default", "SORT defaults"], ["cross_validated", "tuned (held out)"]]) {
+    const m = R.detectors[d][k], w = k === "cross_validated";
+    h += `<tr><td>${d}</td><td>${name}</td><td class="${w && m.idf1 > R.detectors[d].default.idf1 ? "win" : ""}">${pct(m.idf1)}</td><td>${pct(m.mota)}</td><td class="${w && m.id_switches < R.detectors[d].default.id_switches ? "win" : ""}">${n(m.id_switches)}</td>` +
+         `<td>${n(m.false_positives)}</td><td>${n(m.misses)}</td><td>${m.mostly_tracked} / ${m.gt_objects}</td></tr>`;
+  }
+}
+document.getElementById("cv").innerHTML = h;
+
+h = "<tr><th>detector</th><th>setting</th><th>IoU</th><th>max age</th><th>min hits</th><th>score threshold</th><th>second pass</th></tr>";
+const row = (d, name, s) => `<tr><td>${d}</td><td>${name}</td><td>${s.iou_match}</td><td>${s.max_age}</td><td>${s.min_hits}</td><td>${s.min_score ?? "none"}</td><td>${s.second_pass ? "yes" : "no"}</td></tr>`;
+h += row("all", "SORT defaults", {iou_match: 0.3, max_age: 1, min_hits: 3, min_score: null, second_pass: false});
+for (const d of D) h += row(d, "tuned on all 7", R.detectors[d].tuned_on_all.settings);
+document.getElementById("settings").innerHTML = h;
+document.getElementById("setnote").textContent =
+  `${D.length} detectors × ${Math.max(...Object.values(R.grid_size))} settings searched. Score thresholds are quantiles of each detector's own scores. ` +
+  `Tracker speed measured on ${R.timing.cpu}.`;
+</script>
+</body>
+</html>
